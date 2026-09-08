@@ -1,0 +1,207 @@
+name: Build APKs from uploaded ZIP
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_file:
+        description: "Repository rootidagi loyiha ZIP fayli"
+        required: false
+        default: "agrostar_davomat_GITHUB_READY.zip"
+      api_base_url:
+        description: "Backend API manzili. Bo'sh qoldirilsa Settings > Variables dagi API_BASE_URL olinadi."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repositoryni olish
+        uses: actions/checkout@v4
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Flutter 3.47.2
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.2"
+          channel: stable
+          cache: true
+
+      - name: ZIP faylni topish va ochish
+        shell: bash
+        env:
+          INPUT_ZIP: ${{ github.event.inputs.zip_file }}
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE="${INPUT_ZIP:-}"
+
+          if [ -z "$ZIP_FILE" ] || [ ! -f "$ZIP_FILE" ]; then
+            mapfile -t ZIPS < <(find . -maxdepth 1 -type f -name "*.zip" -printf "%f\n" | sort)
+            if [ "${#ZIPS[@]}" -eq 0 ]; then
+              echo "::error::Repository rootida ZIP fayl topilmadi."
+              exit 1
+            fi
+            if [ "${#ZIPS[@]}" -gt 1 ]; then
+              echo "::error::Bir nechta ZIP topildi. Run workflow oynasida zip_file nomini aniq kiriting:"
+              printf ' - %s\n' "${ZIPS[@]}"
+              exit 1
+            fi
+            ZIP_FILE="${ZIPS[0]}"
+          fi
+
+          echo "ZIP: $ZIP_FILE"
+          rm -rf __project_unpack
+          mkdir -p __project_unpack
+          unzip -q "$ZIP_FILE" -d __project_unpack
+
+          EMPLOYEE_PUB="$(find __project_unpack -type f -path "*/employee_app/pubspec.yaml" | head -n 1)"
+          ADMIN_PUB="$(find __project_unpack -type f -path "*/admin_app/pubspec.yaml" | head -n 1)"
+
+          if [ -z "$EMPLOYEE_PUB" ] || [ -z "$ADMIN_PUB" ]; then
+            echo "::error::ZIP ichidan employee_app/pubspec.yaml va admin_app/pubspec.yaml topilmadi."
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$(dirname "$EMPLOYEE_PUB")")"
+
+          if [ ! -f "$PROJECT_DIR/scripts/bootstrap_android.sh" ]; then
+            echo "::error::$PROJECT_DIR/scripts/bootstrap_android.sh topilmadi."
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Loyiha papkasi: $PROJECT_DIR"
+
+      - name: API manzilini aniqlash
+        id: api
+        shell: bash
+        env:
+          INPUT_API: ${{ github.event.inputs.api_base_url }}
+          REPO_API: ${{ vars.API_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          API_URL="${INPUT_API:-}"
+          if [ -z "$API_URL" ]; then
+            API_URL="${REPO_API:-}"
+          fi
+
+          if [ -z "$API_URL" ]; then
+            echo "::error::API manzili yo'q. Run workflow dagi api_base_url ni kiriting yoki Settings > Secrets and variables > Actions > Variables da API_BASE_URL yarating."
+            exit 1
+          fi
+
+          API_URL="${API_URL%/}"
+          echo "url=$API_URL" >> "$GITHUB_OUTPUT"
+          echo "API: $API_URL"
+
+      - name: Android platform fayllarini yaratish
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "$PROJECT_DIR/scripts/bootstrap_android.sh"
+          cd "$PROJECT_DIR"
+          ./scripts/bootstrap_android.sh
+
+      - name: Ixtiyoriy release signing
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          if [ -z "${KEYSTORE_B64:-}" ]; then
+            echo "Signing secretlari kiritilmagan. Test/o'rnatish uchun template signing ishlatiladi."
+            exit 0
+          fi
+
+          for APP in employee_app admin_app; do
+            echo "$KEYSTORE_B64" | base64 --decode > "$APP/android/app/upload-keystore.jks"
+            cat > "$APP/android/key.properties" <<PROPS
+          storePassword=$STORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=upload-keystore.jks
+          PROPS
+          done
+
+      - name: Hodim ilovasini tekshirish
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR/employee_app"
+          flutter pub get
+          flutter analyze
+
+      - name: Hodim APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR/employee_app"
+          flutter build apk \
+            --release \
+            --build-number="${{ github.run_number }}" \
+            --dart-define="API_BASE_URL=${{ steps.api.outputs.url }}"
+
+      - name: Admin ilovasini tekshirish
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR/admin_app"
+          flutter pub get
+          flutter analyze
+
+      - name: Admin APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR/admin_app"
+          flutter build apk \
+            --release \
+            --build-number="${{ github.run_number }}" \
+            --dart-define="API_BASE_URL=${{ steps.api.outputs.url }}"
+
+      - name: APKlarni tayyorlash
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "$PROJECT_DIR/employee_app/build/app/outputs/flutter-apk/app-release.apk" dist/agrostar-hodim.apk
+          cp "$PROJECT_DIR/admin_app/build/app/outputs/flutter-apk/app-release.apk" dist/davomat-admin.apk
+          sha256sum dist/*.apk > dist/SHA256SUMS.txt
+          ls -lh dist
+
+      - name: Hodim APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agrostar-hodim-apk
+          path: dist/agrostar-hodim.apk
+          retention-days: 30
+
+      - name: Admin APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: davomat-admin-apk
+          path: dist/davomat-admin.apk
+          retention-days: 30
+
+      - name: SHA256
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-checksums
+          path: dist/SHA256SUMS.txt
+          retention-days: 30
