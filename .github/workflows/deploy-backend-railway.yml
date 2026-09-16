@@ -1,0 +1,78 @@
+name: Deploy Backend to Railway
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_file:
+        description: "Repository rootidagi Railway-ready ZIP"
+        required: false
+        default: "agrostar_davomat_RAILWAY_READY.zip"
+      railway_service:
+        description: "Railway backend service nomi"
+        required: false
+        default: "backend-api"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repositoryni olish
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: ZIPni ochish va backendni topish
+        shell: bash
+        env:
+          INPUT_ZIP: ${{ github.event.inputs.zip_file }}
+        run: |
+          set -euo pipefail
+          ZIP_FILE="${INPUT_ZIP:-}"
+          if [ -z "$ZIP_FILE" ] || [ ! -f "$ZIP_FILE" ]; then
+            mapfile -t ZIPS < <(find . -maxdepth 1 -type f -name "*.zip" -printf "%f\n" | sort)
+            if [ "${#ZIPS[@]}" -eq 0 ]; then
+              echo "::error::Repository rootida ZIP topilmadi."
+              exit 1
+            fi
+            if [ "${#ZIPS[@]}" -gt 1 ]; then
+              echo "::error::Bir nechta ZIP topildi; zip_file ni aniq kiriting."
+              printf ' - %s\n' "${ZIPS[@]}"
+              exit 1
+            fi
+            ZIP_FILE="${ZIPS[0]}"
+          fi
+
+          rm -rf __railway_unpack
+          mkdir -p __railway_unpack
+          unzip -q "$ZIP_FILE" -d __railway_unpack
+
+          DOCKERFILE="$(find __railway_unpack -type f -path '*/backend/Dockerfile' | head -n 1)"
+          if [ -z "$DOCKERFILE" ]; then
+            echo "::error::ZIP ichidan backend/Dockerfile topilmadi."
+            exit 1
+          fi
+          BACKEND_DIR="$(dirname "$DOCKERFILE")"
+          echo "BACKEND_DIR=$BACKEND_DIR" >> "$GITHUB_ENV"
+          echo "Backend: $BACKEND_DIR"
+
+      - name: Railwayga deploy
+        shell: bash
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SERVICE: ${{ github.event.inputs.railway_service }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RAILWAY_TOKEN:-}" ]; then
+            echo "::error::GitHub Secrets ichida RAILWAY_TOKEN yo'q."
+            exit 1
+          fi
+          railway up "$BACKEND_DIR" --path-as-root --service "$SERVICE" --ci
