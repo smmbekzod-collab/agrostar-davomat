@@ -136,6 +136,7 @@ def main():
         left,right=a["runs"][i],b["runs"][i]
         comparison[kind]={"original":left["state"],"candidate":right["state"],
                           "original_s":left["elapsed_s"],"candidate_s":right["elapsed_s"]}
+        print("PUBLIC_SAMPLE_OUTCOME",kind,left["state"],right["state"],left.get("reason_type"),right.get("reason_type"))
         if left["state"]!=right["state"]:
             raise AssertionError(f"Candidate changed {kind} result: {comparison[kind]}")
         if left["state"]=="accepted":
@@ -150,6 +151,7 @@ def main():
             if left["reason_type"]!=right["reason_type"]:
                 raise AssertionError("Strict anti-spoof failure type changed")
     if a["runs"][0]["state"]!="accepted":
+        print("PUBLIC_FACE_DIAG",repr(a["runs"][0]),repr(b["runs"][0]))
         raise AssertionError("Public face was not recognized, benchmark inconclusive")
     # Do not put raw biometric vectors in report artifact.
     for x in (a,b):
