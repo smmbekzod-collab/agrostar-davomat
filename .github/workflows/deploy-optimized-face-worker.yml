@@ -34,11 +34,13 @@ jobs:
               updated={x.filename:new.read(x.filename) for x in new.infolist() if not x.is_dir()}
               changed=[k for k in original if updated.get(k)!=original[k]]
               created=[k for k in updated if k not in original]
-              assert len(changed)==1 and changed[0].endswith('/backend/app/services/face.py'),changed
+              assert len(changed)==2 and any(x.endswith('/backend/app/services/face.py') for x in changed) and any(x.endswith('/backend/Dockerfile') for x in changed),changed
               assert len(created)==1 and created[0].endswith('/backend/app/services/face_worker.py'),created
-              assert b'anti_spoofing=True' in updated[changed[0]]
-              assert b'anti_spoofing=False' in updated[changed[0]]
-              print('PASS: no other backend/app files altered, biometric calls unchanged')
+              face_file=next(x for x in changed if x.endswith('/backend/app/services/face.py'))
+              assert b'CascadeClassifier' in next(updated[x] for x in changed if x.endswith('/backend/Dockerfile'))
+              assert b'anti_spoofing=True' in updated[face_file]
+              assert b'anti_spoofing=False' in updated[face_file]
+              print('PASS: only face.py and OpenCV dependency changed; biometric calls unchanged')
           PY
       - name: Unpack tested backend
         shell: bash
