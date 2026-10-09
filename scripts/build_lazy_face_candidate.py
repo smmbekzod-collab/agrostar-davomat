@@ -83,12 +83,17 @@ with ZipFile(CANDIDATE) as old:
     face_name = next(i.filename for i in old.infolist() if i.filename.endswith("/backend/app/services/face.py"))
     prefix = face_name.removesuffix("face.py")
     worker_name = prefix + "face_worker.py"
+    docker_name = prefix.removesuffix("app/services/") + "Dockerfile"
+    old_docker = old.read(docker_name).decode("utf-8")
+    opencv_guard = "\n# Pin OpenCV because opencv-python 5.x broke CascadeClassifier in CI.\nRUN pip uninstall -y opencv-python opencv-python-headless \\\n    && pip install --no-cache-dir --no-deps opencv-python-headless==4.12.0.88 \\\n    && python -c \"import cv2; assert hasattr(cv2, 'CascadeClassifier')\"\n"
+    if old_docker.count("COPY app ./app") != 1: raise ValueError("Unexpected Dockerfile")
+    new_docker = old_docker.replace("COPY app ./app", opencv_guard+"\nCOPY app ./app")
     patched_face = worker_patch(old.read(face_name).decode("utf-8"))
     worker_source = Path("scripts/face_worker_module.py").read_text(encoding="utf-8")
     ast.parse(worker_source)
     with ZipFile(ISOLATED, "w") as out:
         for info in old.infolist():
-            out.writestr(info, patched_face.encode("utf-8") if info.filename == face_name else old.read(info.filename))
+            out.writestr(info, patched_face.encode("utf-8") if info.filename == face_name else new_docker.encode("utf-8") if info.filename == docker_name else old.read(info.filename))
         out.writestr(worker_name, worker_source.encode("utf-8"))
 with ZipFile(ISOLATED) as z:
     assert z.testzip() is None
