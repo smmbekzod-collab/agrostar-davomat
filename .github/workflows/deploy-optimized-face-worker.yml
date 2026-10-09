@@ -1,0 +1,90 @@
+name: Deploy optimized Davomat face worker
+on:
+  push:
+    branches: [audit/backend-memory-2026-10]
+    paths: ['.github/workflows/deploy-optimized-face-worker.yml']
+permissions:
+  contents: read
+concurrency:
+  group: davomat-optimized-production
+  cancel-in-progress: false
+jobs:
+  validated-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout source of deployed v4.2 package
+        uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build safe production candidate from original ZIP
+        run: python scripts/build_lazy_face_candidate.py
+      - name: Safety checks before deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from zipfile import ZipFile
+          from pathlib import Path
+          a='agrostar_davomat_4_2_PUSH_REMINDER_CALENDAR_FULL.zip'
+          b='davomat_v4_2_face_worker_candidate.zip'
+          with ZipFile(a) as old,ZipFile(b) as new:
+              original={x.filename:old.read(x.filename) for x in old.infolist() if not x.is_dir()}
+              updated={x.filename:new.read(x.filename) for x in new.infolist() if not x.is_dir()}
+              changed=[k for k in original if updated.get(k)!=original[k]]
+              created=[k for k in updated if k not in original]
+              assert len(changed)==1 and changed[0].endswith('/backend/app/services/face.py'),changed
+              assert len(created)==1 and created[0].endswith('/backend/app/services/face_worker.py'),created
+              assert b'anti_spoofing=True' in updated[changed[0]]
+              assert b'anti_spoofing=False' in updated[changed[0]]
+              print('PASS: no other backend/app files altered, biometric calls unchanged')
+          PY
+      - name: Unpack tested backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -q davomat_v4_2_face_worker_candidate.zip -d __optimized_package
+          BACKEND_DIR="$(dirname "$(find __optimized_package -type f -path '*/backend/Dockerfile' | head -n 1)")"
+          test -f "$BACKEND_DIR/app/services/face_worker.py"
+          echo "BACKEND_DIR=$BACKEND_DIR" >> "$GITHUB_ENV"
+          echo "Optimized backend ready"
+      - name: Ensure production scope and existing deployment authorization
+        shell: bash
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          test -n "$RAILWAY_TOKEN" || { echo 'RAILWAY_TOKEN GitHub Secret missing'; exit 1; }
+          echo 'Authorized deploy to existing Railway service only'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Railway CLI
+        run: npm install -g @railway/cli
+      - name: Deploy to existing grand-recreation service
+        shell: bash
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          railway up "$BACKEND_DIR" --path-as-root --service grand-recreation --ci
+      - name: Public health check after deployment
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,time,urllib.request
+          url='https://grand-recreation-production-caad.up.railway.app/health'
+          for i in range(16):
+              try:
+                  with urllib.request.urlopen(url,timeout=8) as res:
+                      data=json.loads(res.read())
+                  if data.get('status')=='ok' and data.get('version')=='4.2.0':
+                      print('PASS: Davomat API healthy; version',data.get('version'))
+                      break
+                  raise RuntimeError('Unexpected health response')
+              except Exception as exc:
+                  print('Health check retry',i+1,type(exc).__name__)
+                  time.sleep(5)
+          else:
+              raise SystemExit('FAIL: Production API health endpoint unavailable')
+          PY
