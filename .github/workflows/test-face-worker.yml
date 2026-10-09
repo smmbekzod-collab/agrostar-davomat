@@ -49,30 +49,7 @@ jobs:
                           dest.write_bytes(z.read(name))
                   backend=pathlib.Path(root)/prefix
               script=backend/'worker_smoke.py'
-              script.write_text("""def run_smoke():
-    from app.services.face import analyze_selfie
-              from app.services.face_worker import worker_running
-              from PIL import Image
-              from skimage.data import astronaut
-              import os, io, time
-              image=Image.fromarray(astronaut()).convert('RGB').crop((70,0,360,360))
-              f=io.BytesIO();image.save(f,format='JPEG',quality=92)
-              assert not worker_running()
-              import app.services.face as face
-              assert 'deepface' not in __import__('sys').modules
-              result=analyze_selfie(f.getvalue(),require_liveness=False)
-              assert len(result[0])>64
-              assert worker_running()
-              assert 'deepface' not in __import__('sys').modules
-              result2=analyze_selfie(f.getvalue(),require_liveness=False)
-              assert len(result2[0])==len(result[0])
-              time.sleep(36)
-              assert not worker_running()
-              print('PASS: separate worker, two actual face requests, parent ML unloaded and worker retired',flush=True)
-          
-if __name__ == '__main__':
-    run_smoke()
-""")
+              script.write_text("from app.services.face import analyze_selfie\nfrom app.services.face_worker import worker_running\nfrom PIL import Image\nfrom skimage.data import astronaut\nimport io, time, sys\n\ndef main():\n    image=Image.fromarray(astronaut()).convert('RGB').crop((70,0,360,360))\n    f=io.BytesIO(); image.save(f,format='JPEG',quality=92)\n    assert not worker_running()\n    assert 'deepface' not in sys.modules\n    result=analyze_selfie(f.getvalue(),require_liveness=False)\n    assert len(result[0])>64\n    assert worker_running()\n    assert 'deepface' not in sys.modules\n    result2=analyze_selfie(f.getvalue(),require_liveness=False)\n    assert len(result2[0])==len(result[0])\n    time.sleep(36)\n    assert not worker_running()\n    print('PASS: separate worker, two actual face requests, parent ML unloaded and worker retired',flush=True)\n\nif __name__ == '__main__':\n    main()\n")
               os.environ['PYTHONPATH']=str(backend)
               import subprocess
               p=subprocess.run([sys.executable,str(script)],cwd=backend,env=os.environ,capture_output=True,text=True,timeout=210)
