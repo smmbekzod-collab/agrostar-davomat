@@ -49,6 +49,7 @@ with ZipFile(ORIGINAL) as original:
     with ZipFile(CANDIDATE) as final:
         assert final.testzip() is None
         assert len(final.infolist()) == len(original.infolist())
-        assert all(final.read(i.filename) == original.read(i.filename) for i in original.infolist() if i.filename != target)
+        with ZipFile(ORIGINAL) as check_original:
+            assert all(final.read(i.filename) == check_original.read(i.filename) for i in check_original.infolist() if i.filename != target)
 print("PASS: only face.py changed; DeepFace import deferred; biometric calls intact")
 print("CANDIDATE", CANDIDATE)
