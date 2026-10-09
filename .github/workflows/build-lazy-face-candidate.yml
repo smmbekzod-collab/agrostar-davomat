@@ -1,0 +1,55 @@
+name: Build safe lazy DeepFace candidate (not deployed)
+on:
+  push:
+    branches: [audit/backend-memory-2026-10]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Generate candidate and check unchanged security calls
+        run: python scripts/build_lazy_face_candidate.py
+      - name: Validate lazy imports and verify numeric logic
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check numpy==2.1.3 Pillow==11.3.0
+          python - <<'PY'
+          import ast, sys, types, pathlib, tempfile, zipfile
+          from types import SimpleNamespace
+          orig = 'agrostar_davomat_4_2_PUSH_REMINDER_CALENDAR_FULL.zip'
+          cand = 'davomat_v4_2_lazy_deepface_candidate.zip'
+          with zipfile.ZipFile(orig) as old, zipfile.ZipFile(cand) as new:
+              filepath = next(n for n in old.namelist() if n.endswith('/backend/app/services/face.py'))
+              old_source = old.read(filepath).decode('utf-8')
+              new_source = new.read(filepath).decode('utf-8')
+          assert old_source.count('from deepface import DeepFace') == 1
+          assert new_source.count('from deepface import DeepFace') == 2
+          ast.parse(new_source)
+          assert 'deepface' not in sys.modules
+          pkg=types.ModuleType('app')
+          pkg.__path__=[]
+          core=types.ModuleType('app.core')
+          core.__path__=[]
+          config=types.ModuleType('app.core.config')
+          config.settings=SimpleNamespace(face_detector='retinaface',face_model='Facenet512',face_threshold=.3,max_upload_bytes=10_000_000)
+          sys.modules.update({'app':pkg,'app.core':core,'app.core.config':config})
+          module=types.ModuleType('app.services.face')
+          exec(compile(new_source,'face.py','exec'),module.__dict__)
+          assert 'deepface' not in sys.modules, 'The heavy ML stack loaded during import'
+          import numpy as np
+          d=module.cosine_distance([1.0,0.0],[1.0,0.0])
+          assert abs(d)<1e-6
+          assert module.verify_embedding([1.,0.],[1.,0.])[0]
+          print('PASS: no DeepFace/TensorFlow import on module load; numerical verification works')
+          PY
+      - name: Publish candidate archive only for manual staging review
+        uses: actions/upload-artifact@v4
+        with:
+          name: davomat-v4-2-lazy-deepface-candidate-NOT-DEPLOYED
+          path: davomat_v4_2_lazy_deepface_candidate.zip
+          retention-days: 14
