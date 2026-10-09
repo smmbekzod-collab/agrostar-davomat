@@ -9,6 +9,7 @@ import sys
 
 ORIGINAL = Path("agrostar_davomat_4_2_PUSH_REMINDER_CALENDAR_FULL.zip")
 CANDIDATE = Path("davomat_v4_2_lazy_deepface_candidate.zip")
+ISOLATED = Path("davomat_v4_2_face_worker_candidate.zip")
 
 def patch(source: str) -> str:
     needle = "from deepface import DeepFace\n"
@@ -53,3 +54,44 @@ with ZipFile(ORIGINAL) as original:
             assert all(final.read(i.filename) == check_original.read(i.filename) for i in check_original.infolist() if i.filename != target)
 print("PASS: only face.py changed; DeepFace import deferred; biometric calls intact")
 print("CANDIDATE", CANDIDATE)
+
+
+# Additional candidate: preserve strict face and liveness policy, but run the
+# complete face analysis inside a spawned worker that exits after inactivity.
+def worker_patch(source: str) -> str:
+    # Work from the already lazy-imported module, to ensure CPU ML packages
+    # never enter the HTTP server process even on the first attendance request.
+    signature = "def analyze_selfie(image_bytes: bytes, require_liveness: bool = True, soft_liveness: bool = False) -> tuple[list[float], float | None, bytes]:"
+    if source.count(signature) != 1:
+        raise ValueError("Face public method signature changed")
+    patched = source.replace(signature, signature.replace("analyze_selfie(", "_analyze_selfie_local("), 1)
+    wrapper = '''
+def analyze_selfie(image_bytes: bytes, require_liveness: bool = True, soft_liveness: bool = False) -> tuple[list[float], float | None, bytes]:
+    from app.services.face_worker import analyze_selfie_isolated
+    return analyze_selfie_isolated(image_bytes, require_liveness, soft_liveness)
+
+'''
+    # Place wrapper before extract_embedding (avoids modifying its call graph).
+    insertion = "\ndef extract_embedding("
+    if patched.count(insertion) != 1:
+        raise ValueError("No insertion point for public API wrapper")
+    patched = patched.replace(insertion, "\n" + wrapper + "def extract_embedding(", 1)
+    ast.parse(patched)
+    return patched
+
+with ZipFile(CANDIDATE) as old:
+    face_name = next(i.filename for i in old.infolist() if i.filename.endswith("/backend/app/services/face.py"))
+    prefix = face_name.removesuffix("face.py")
+    worker_name = prefix + "face_worker.py"
+    patched_face = worker_patch(old.read(face_name).decode("utf-8"))
+    worker_source = Path("scripts/face_worker_module.py").read_text(encoding="utf-8")
+    ast.parse(worker_source)
+    with ZipFile(ISOLATED, "w") as out:
+        for info in old.infolist():
+            out.writestr(info, patched_face.encode("utf-8") if info.filename == face_name else old.read(info.filename))
+        out.writestr(worker_name, worker_source.encode("utf-8"))
+with ZipFile(ISOLATED) as z:
+    assert z.testzip() is None
+    assert worker_name in z.namelist()
+    assert len(z.namelist()) == len(ZipFile(CANDIDATE).namelist()) + 1
+print("PASS: isolated one-worker candidate created, model policy unchanged", ISOLATED)
