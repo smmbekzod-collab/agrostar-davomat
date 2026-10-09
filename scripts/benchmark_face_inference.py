@@ -60,6 +60,7 @@ for require_liveness in (False,False,True):
     except Exception as exc:
         # No staff image or sensitive traceback. Same input to both versions.
         result={"state":"rejected","exception":type(exc).__name__,
+                "detail":str(exc)[:400],  # public test image only; no user data
                 "reason_type":("liveness" if "jonli yuz" in str(exc).lower()
                       or "spoof" in str(exc).lower() else "other")}
     result["require_liveness"]=require_liveness
