@@ -46,3 +46,16 @@ jobs:
                       if sensitive.search(line): line='[filtered]'
                       print(str(j+1)+': '+line[:260])
           PY
+      - name: Inspect face service source (no secrets)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('agrostar_davomat_4_2_PUSH_REMINDER_CALENDAR_FULL.zip') as z:
+              face=next(n for n in z.namelist() if n.endswith('/backend/app/services/face.py'))
+              content=z.read(face).decode('utf-8')
+              print('FACE SERVICE SOURCE START')
+              for num,line in enumerate(content.splitlines(),1):
+                  print(f'{num:03}: {line}')
+              print('FACE SERVICE SOURCE END')
+          PY
