@@ -1,0 +1,48 @@
+name: Inspect Davomat Backend Memory (read only)
+on:
+  push:
+    branches: [audit/backend-memory-2026-10]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Analyze bundled backend without running application
+        shell: bash
+        run: |
+          python - <<'PY'
+          import re, zipfile, pathlib
+          zipname = 'agrostar_davomat_4_2_PUSH_REMINDER_CALENDAR_FULL.zip'
+          pat = re.compile(r'face|biometr|embedding|model|onnx|torch|tensorflow|cv2|insight|deepface|detect|worker|uvicorn|gunicorn|startup|lifespan|cache|load|init', re.I)
+          sensitive = re.compile(r'(password|secret|private.key|access.token|api.key|bearer|credentials|biometric.key)', re.I)
+          with zipfile.ZipFile(zipname) as z:
+              names = z.namelist()
+              py = [n for n in names if '/backend/' in n and n.endswith('.py') and '/.venv' not in n and '/__pycache__/' not in n]
+              configs = [n for n in names if '/backend/' in n and n.split('/')[-1] in ('Dockerfile','requirements.txt','pyproject.toml','gunicorn.conf.py')]
+              print('AUDIT ZIP:',zipname)
+              print('BACKEND PY FILES:',len(py))
+              print('BACKEND PATHS:')
+              for n in py[:90]: print(n)
+              print('CONFIG FILES:')
+              for n in configs:
+                  print('==',n,'==')
+                  for i,line in enumerate(z.read(n).decode('utf-8',errors='replace').splitlines(),1):
+                      if sensitive.search(line): print(f'{i}: [filtered]');continue
+                      if len(line)>300: line=line[:300]+'...'
+                      print(f'{i}: {line}')
+              print('MODEL LOADING AND INFERENCE CODE CONTEXT:')
+              for n in py:
+                  data=z.read(n).decode('utf-8',errors='replace').splitlines()
+                  matches=[i for i,line in enumerate(data) if pat.search(line) and not sensitive.search(line)]
+                  if not matches:continue
+                  chunks=set()
+                  for i in matches[:18]:
+                      for j in range(max(0,i-2),min(len(data),i+4)):chunks.add(j)
+                  print('==',n,'lines',len(data),'matches',len(matches),'==')
+                  for j in sorted(chunks)[:100]:
+                      line=data[j].strip()
+                      if sensitive.search(line): line='[filtered]'
+                      print(str(j+1)+': '+line[:260])
+          PY
