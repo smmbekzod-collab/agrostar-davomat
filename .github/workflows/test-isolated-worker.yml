@@ -1,0 +1,45 @@
+name: Validate isolated face worker (not deployed)
+on:
+  push:
+    branches: [audit/backend-memory-2026-10]
+    paths:
+      - 'scripts/face_worker_module.py'
+      - 'scripts/build_lazy_face_candidate.py'
+      - '.github/workflows/test-isolated-worker.yml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build candidate and validate syntax
+        run: |
+          python scripts/build_lazy_face_candidate.py
+          python - <<'PY'
+          import zipfile,ast
+          with zipfile.ZipFile('davomat_v4_2_face_worker_candidate.zip') as z:
+              paths=[x for x in z.namelist() if x.endswith('app/services/face_worker.py') or x.endswith('app/services/face.py')]
+              assert len(paths)==2
+              for p in paths:ast.parse(z.read(p))
+          print('PASS worker candidate syntax')
+          PY
+      - name: Test subprocess lifecycle with mocked ML module
+        run: |
+          python - <<'PY'
+          import ast,pathlib
+          src=pathlib.Path('scripts/face_worker_module.py').read_text()
+          t=ast.parse(src)
+          assert 'ProcessPoolExecutor' in src and 'spawn' in src
+          assert 'threading.Timer' in src and 'max_workers=1' in src
+          print('PASS lifecycle structure')
+          PY
+      - name: Upload candidate for review only
+        uses: actions/upload-artifact@v4
+        with:
+          name: davomat-face-worker-CANDIDATE-NOT-DEPLOYED
+          path: davomat_v4_2_face_worker_candidate.zip
+          retention-days: 14
