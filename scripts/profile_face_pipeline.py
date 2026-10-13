@@ -46,7 +46,7 @@ def load_face():
     core.__path__ = []
     config = types.ModuleType("app.core.config")
     config.settings = SimpleNamespace(
-        face_detector="opencv", face_model="Facenet512",
+        face_detector=os.environ.get("FACE_TEST_DETECTOR", "opencv"), face_model="Facenet512",
         face_threshold=0.3, max_upload_bytes=10_000_000)
     sys.modules.update({
         "app": app, "app.core": core, "app.core.config": config
@@ -143,6 +143,7 @@ def main():
 
     payload = {
         "source": "public skimage astronaut only",
+        "detector": os.environ.get("FACE_TEST_DETECTOR", "opencv"),
         "production_affected": False,
         "api_import_seconds": api_import,
         "ml_import_seconds": ml_import,
