@@ -160,9 +160,13 @@ def main():
                     raise AssertionError("Liveness score changed")
             else:
                 disagreement = None
-            removed = baseline_retina_calls - optimized_retina_calls
-            if removed != (1 if baseline["outcome"] == "accepted" else 0):
-                raise AssertionError("Detector pass count mismatch: baseline={}, candidate={}, removed={}, outcome={}".format(baseline["detector_calls"], candidate["detector_calls"], removed, baseline["outcome"]))
+            # If RetinaFace declines a rotated image, the application may fall
+            # back to OpenCV. In either case, only the *last* embedding detector
+            # call may disappear; all security/liveness passes must remain.
+            expected_calls = (baseline["detector_calls"][:-1]
+                if baseline["outcome"] == "accepted" else baseline["detector_calls"])
+            if candidate["detector_calls"] != expected_calls:
+                raise AssertionError("Unexpected change in recognition/liveness detectors: baseline={}, candidate={}".format(baseline["detector_calls"], candidate["detector_calls"]))
             rows.append({
                 "sample": sample_name,
                 "strict": strict,
@@ -172,6 +176,9 @@ def main():
                 "optimized_seconds": candidate["seconds"],
                 "original_retina_calls": baseline_retina_calls,
                 "optimized_retina_calls": optimized_retina_calls,
+                "original_total_detector_calls": len(baseline["detector_calls"]),
+                "optimized_total_detector_calls": len(candidate["detector_calls"]),
+                "fallback_to_opencv": any(c["backend"] == "opencv" for c in baseline["detector_calls"]),
                 "strict_liveness_calls_preserved": b_liveness == c_liveness,
             })
 
