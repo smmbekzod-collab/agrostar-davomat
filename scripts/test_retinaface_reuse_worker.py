@@ -162,7 +162,7 @@ def main():
                 disagreement = None
             removed = baseline_retina_calls - optimized_retina_calls
             if removed != (1 if baseline["outcome"] == "accepted" else 0):
-                raise AssertionError(f"Detector pass count mismatch: baseline={baseline[\'detector_calls\']}, candidate={candidate[\'detector_calls\']}, removed={removed}, outcome={baseline[\'outcome\']}")
+                raise AssertionError("Detector pass count mismatch: baseline={}, candidate={}, removed={}, outcome={}".format(baseline["detector_calls"], candidate["detector_calls"], removed, baseline["outcome"]))
             rows.append({
                 "sample": sample_name,
                 "strict": strict,
