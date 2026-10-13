@@ -135,12 +135,6 @@ def main():
             candidate = evaluate(optimized, payload, strict)
             if baseline["outcome"] != candidate["outcome"]:
                 raise AssertionError(f"Rejected/accepted mismatch: {sample_name}, strict={strict}")
-            if candidate["detector_calls"] != [
-                c for c in baseline["detector_calls"] if c["backend"] != "retinaface"
-            ]:
-                # More robust exact contract below; allow the one deleted
-                # recognition detection only, never a missing liveness detector.
-                pass
             b_liveness = sum(int(x["anti_spoofing"]) for x in baseline["detector_calls"])
             c_liveness = sum(int(x["anti_spoofing"]) for x in candidate["detector_calls"])
             if b_liveness != c_liveness:
@@ -166,8 +160,9 @@ def main():
                     raise AssertionError("Liveness score changed")
             else:
                 disagreement = None
-            if optimized_retina_calls > baseline_retina_calls:
-                raise AssertionError("More RetinaFace detector passes in candidate")
+            removed = baseline_retina_calls - optimized_retina_calls
+            if removed != (1 if baseline["outcome"] == "accepted" else 0):
+                raise AssertionError("Unexpected detection pass count change")
             rows.append({
                 "sample": sample_name,
                 "strict": strict,
