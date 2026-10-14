@@ -12,6 +12,50 @@ from concurrent.futures.process import BrokenProcessPool
 import multiprocessing
 import os
 import threading
+from pathlib import Path
+
+
+_MODEL_CACHE_RECLAIM = os.getenv("FACE_IDLE_MODEL_CACHE_RECLAIM", "0").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+
+
+def _advise_idle_model_cache() -> None:
+    """Best-effort release of *clean* DeepFace model file pages, never files.
+
+    Default is OFF. An optional cost experiment for a low-traffic Railway
+    service: call only after the isolated ML subprocess has fully exited.
+    May increase first-inference latency as model files must be read again.
+    """
+    if not _MODEL_CACHE_RECLAIM or not hasattr(os, "posix_fadvise"):
+        return
+
+    try:
+        weight_dir = Path.home() / ".deepface" / "weights"
+        if not weight_dir.is_dir():
+            return
+        # DeepFace weights only. Ignore symlinks and everything else on disk.
+        for path in weight_dir.iterdir():
+            if path.is_symlink() or path.suffix.lower() not in (
+                ".h5", ".keras", ".pth", ".pt", ".onnx", ".pb"
+            ):
+                continue
+            try:
+                fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    import stat
+                    info = os.fstat(fd)
+                    if stat.S_ISREG(info.st_mode) and info.st_size >= 4 * 1024 * 1024:
+                        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+                finally:
+                    os.close(fd)
+            except (OSError, ValueError):
+                # Lack of kernel support must never affect attendance.
+                continue
+    except (OSError, ValueError):
+        return
+
+
 
 _IDLE_SECONDS = max(30, min(600, int(os.getenv("FACE_WORKER_IDLE_SECONDS", "90"))))
 _TIMEOUT_SECONDS = max(30, min(600, int(os.getenv("FACE_WORKER_TIMEOUT_SECONDS", "240"))))
@@ -34,7 +78,14 @@ def _retire(expected_pool):
             return
         _POOL = None
         _IDLE_TIMER = None
-    expected_pool.shutdown(wait=False, cancel_futures=False)
+    # Retirement executes in a daemon timer thread, not the HTTP request path.
+    # Wait for full exit before advising the kernel about cached weight pages.
+    expected_pool.shutdown(wait=True, cancel_futures=False)
+    if _MODEL_CACHE_RECLAIM:
+        with _LOCK:
+            # Never evict while a new inference worker is in use.
+            if _POOL is None and _ACTIVE == 0:
+                _advise_idle_model_cache()
 
 
 def _close_on_exit():
