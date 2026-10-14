@@ -42,6 +42,8 @@ jobs:
               assert b'anti_spoofing=False' in updated[face_file]
               print('PASS: only face.py and OpenCV dependency changed; biometric calls unchanged')
           PY
+      - name: Run idle cache regression tests
+        run: python -m unittest discover -s scripts -p 'test_idle_weight_cache.py' -v
       - name: Unpack tested backend
         shell: bash
         run: |
@@ -51,6 +53,95 @@ jobs:
           test -f "$BACKEND_DIR/app/services/face_worker.py"
           echo "BACKEND_DIR=$BACKEND_DIR" >> "$GITHUB_ENV"
           echo "Optimized backend ready"
+      - name: Enable verified opt-in idle cache in generated Dockerfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$BACKEND_DIR/Dockerfile"
+          test -f "$BACKEND_DIR/app/services/face_worker.py"
+          grep -q 'FACE_IDLE_FILE_CACHE_RECLAIM' "$BACKEND_DIR/app/services/face_worker.py"
+          if ! grep -q '^ENV FACE_IDLE_FILE_CACHE_RECLAIM=1
+        shell: bash
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          test -n "$RAILWAY_TOKEN" || { echo 'RAILWAY_TOKEN GitHub Secret missing'; exit 1; }
+          echo 'Authorized deploy to existing Railway service only'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Railway CLI
+        run: npm install -g @railway/cli
+      - name: Deploy to existing grand-recreation service
+        shell: bash
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          railway up "$BACKEND_DIR" --path-as-root --service grand-recreation --ci
+      - name: Public health check after deployment
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,time,urllib.request
+          url='https://grand-recreation-production-caad.up.railway.app/health'
+          for i in range(16):
+              try:
+                  with urllib.request.urlopen(url,timeout=8) as res:
+                      data=json.loads(res.read())
+                  if data.get('status')=='ok' and data.get('version')=='4.2.0':
+                      print('PASS: Davomat API healthy; version',data.get('version'))
+                      break
+                  raise RuntimeError('Unexpected health response')
+              except Exception as exc:
+                  print('Health check retry',i+1,type(exc).__name__)
+                  time.sleep(5)
+          else:
+              raise SystemExit('FAIL: Production API health endpoint unavailable')
+          PY
+ "$BACKEND_DIR/Dockerfile"; then
+            printf '\\nENV FACE_IDLE_FILE_CACHE_RECLAIM=1\\n' >> "$BACKEND_DIR/Dockerfile"
+          fi
+          grep -q '^ENV FACE_IDLE_FILE_CACHE_RECLAIM=1
+        shell: bash
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          test -n "$RAILWAY_TOKEN" || { echo 'RAILWAY_TOKEN GitHub Secret missing'; exit 1; }
+          echo 'Authorized deploy to existing Railway service only'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Railway CLI
+        run: npm install -g @railway/cli
+      - name: Deploy to existing grand-recreation service
+        shell: bash
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          railway up "$BACKEND_DIR" --path-as-root --service grand-recreation --ci
+      - name: Public health check after deployment
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,time,urllib.request
+          url='https://grand-recreation-production-caad.up.railway.app/health'
+          for i in range(16):
+              try:
+                  with urllib.request.urlopen(url,timeout=8) as res:
+                      data=json.loads(res.read())
+                  if data.get('status')=='ok' and data.get('version')=='4.2.0':
+                      print('PASS: Davomat API healthy; version',data.get('version'))
+                      break
+                  raise RuntimeError('Unexpected health response')
+              except Exception as exc:
+                  print('Health check retry',i+1,type(exc).__name__)
+                  time.sleep(5)
+          else:
+              raise SystemExit('FAIL: Production API health endpoint unavailable')
+          PY
+ "$BACKEND_DIR/Dockerfile"
       - name: Ensure production scope and existing deployment authorization
         shell: bash
         env:
