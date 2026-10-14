@@ -1,0 +1,17 @@
+name: Inspect startup and scheduler without running backend
+on:
+  push:
+    branches: [audit/backend-perf-2026-10-13]
+    paths:
+      - 'scripts/audit_backend_startup.py'
+      - '.github/workflows/audit-backend-startup.yml'
+permissions:
+  contents: read
+jobs:
+  static-inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Analyze source with standard library AST (no execution)
+        run: python scripts/audit_backend_startup.py
