@@ -1,4 +1,4 @@
-name: Validate optional idle model page-cache savings (NO DEPLOY)
+name: Validate optional idle AI library and model cache savings (NO DEPLOY)
 on:
   push:
     branches: [audit/backend-idle-cache-2026-10-14]
@@ -36,7 +36,7 @@ jobs:
               assert len(face)==1 and len(worker)==1
               source=z.read(worker[0]).decode()
               assert source==Path('scripts/face_worker_module.py').read_text()
-              assert 'FACE_IDLE_MODEL_CACHE_RECLAIM' in source
+              assert 'FACE_IDLE_FILE_CACHE_RECLAIM' in source
               assert 'shutdown(wait=True, cancel_futures=False)' in source
               assert 'anti_spoofing=True' in z.read(face[0]).decode()
               ast.parse(source)
@@ -45,6 +45,6 @@ jobs:
       - name: Publish candidate for manual review only
         uses: actions/upload-artifact@v4
         with:
-          name: davomat-idle-cache-OPTIONAL-NOT-DEPLOYED
+          name: davomat-idle-ai-library-cache-OPTIONAL-NOT-DEPLOYED
           path: davomat_v4_2_face_worker_candidate.zip
           retention-days: 14
