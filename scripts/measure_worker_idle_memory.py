@@ -28,28 +28,32 @@ def children():
             pass
     return out
 
-assert not worker_running()
-base=Image.fromarray(astronaut()).convert("RGB").crop((70,0,360,360))
-file=io.BytesIO();base.save(file,format="JPEG",quality=92)
-before={"worker_running":worker_running(),"main_rss_mb":rss_mb(),"children":children()}
-t=time.perf_counter()
-vec,_,_=analyze_selfie(file.getvalue(),require_liveness=False)
-assert len(vec)==512
-elapsed=round(time.perf_counter()-t,3)
-immediate={"worker_running":worker_running(),"main_rss_mb":rss_mb(),"children":children()}
-time.sleep(39)
-gc.collect()
-time.sleep(3)
-after={"worker_running":worker_running(),"main_rss_mb":rss_mb(),"children":children()}
-print("WORKER_IDLE_METRICS "+json.dumps({
-"public_only":True,
-"production_changed":False,
-"worker_idle_seconds":30,
-"inference_seconds":elapsed,
-"before":before,
-"immediate":immediate,
-"after_42_seconds":after,
-},sort_keys=True),flush=True)
+def main():
+    assert not worker_running()
+    base=Image.fromarray(astronaut()).convert("RGB").crop((70,0,360,360))
+    file=io.BytesIO();base.save(file,format="JPEG",quality=92)
+    before={"worker_running":worker_running(),"main_rss_mb":rss_mb(),"children":children()}
+    t=time.perf_counter()
+    vec,_,_=analyze_selfie(file.getvalue(),require_liveness=False)
+    assert len(vec)==512
+    elapsed=round(time.perf_counter()-t,3)
+    immediate={"worker_running":worker_running(),"main_rss_mb":rss_mb(),"children":children()}
+    time.sleep(39)
+    gc.collect()
+    time.sleep(3)
+    after={"worker_running":worker_running(),"main_rss_mb":rss_mb(),"children":children()}
+    print("WORKER_IDLE_METRICS "+json.dumps({
+    "public_only":True,
+    "production_changed":False,
+    "worker_idle_seconds":30,
+    "inference_seconds":elapsed,
+    "before":before,
+    "immediate":immediate,
+    "after_42_seconds":after,
+    },sort_keys=True),flush=True)
+
+if __name__ == '__main__':
+    main()
 '''
 with tempfile.TemporaryDirectory(prefix="worker-ram-test-") as tmp:
     with zipfile.ZipFile(ARCHIVE) as z:
