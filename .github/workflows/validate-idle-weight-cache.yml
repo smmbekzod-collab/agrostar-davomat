@@ -1,0 +1,50 @@
+name: Validate optional idle AI library and model cache savings (NO DEPLOY)
+on:
+  push:
+    branches: [audit/backend-idle-cache-2026-10-14]
+    paths:
+      - 'scripts/face_worker_module.py'
+      - 'scripts/test_idle_weight_cache.py'
+      - '.github/workflows/validate-idle-weight-cache.yml'
+permissions:
+  contents: read
+jobs:
+  test-without-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Assert default is OFF and run read-only cache lifecycle tests
+        run: python scripts/test_idle_weight_cache.py
+      - name: Build offline production-derived candidate (no deploy)
+        run: python scripts/build_lazy_face_candidate.py
+      - name: Verify only isolated worker changed from established candidate
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          import ast
+          path='davomat_v4_2_face_worker_candidate.zip'
+          with ZipFile(path) as z:
+              assert z.testzip() is None
+              face = [p for p in z.namelist() if p.endswith('/backend/app/services/face.py')]
+              worker = [p for p in z.namelist() if p.endswith('/backend/app/services/face_worker.py')]
+              assert len(face)==1 and len(worker)==1
+              source=z.read(worker[0]).decode()
+              assert source==Path('scripts/face_worker_module.py').read_text()
+              assert 'FACE_IDLE_FILE_CACHE_RECLAIM' in source
+              assert 'shutdown(wait=True, cancel_futures=False)' in source
+              assert 'anti_spoofing=True' in z.read(face[0]).decode()
+              ast.parse(source)
+          print('PASS: opt-in, no biometric code change, offline ZIP artifact')
+          PY
+      - name: Publish candidate for manual review only
+        uses: actions/upload-artifact@v4
+        with:
+          name: davomat-idle-ai-library-cache-OPTIONAL-NOT-DEPLOYED
+          path: davomat_v4_2_face_worker_candidate.zip
+          retention-days: 14

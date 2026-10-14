@@ -12,6 +12,60 @@ from concurrent.futures.process import BrokenProcessPool
 import multiprocessing
 import os
 import threading
+import sysconfig
+from pathlib import Path
+
+
+_FILE_CACHE_RECLAIM = os.getenv("FACE_IDLE_FILE_CACHE_RECLAIM", "0").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+
+
+def _advise_idle_ai_file_cache() -> None:
+    """Best-effort, opt-in reclaim of clean AI weight/library file pages.
+
+    Only after the isolated ML child has exited. No files are altered and
+    kernel can refuse advisory eviction. Later face requests may cold-load.
+    """
+    if not _FILE_CACHE_RECLAIM or not hasattr(os, "posix_fadvise"):
+        return
+
+    # Exact observed model-bearing libraries; no indiscriminate directory walk.
+    libroot = Path(sysconfig.get_paths()["purelib"])
+    library_paths = [
+        libroot / "tensorflow/libtensorflow_cc.so.2",
+        libroot / "tensorflow/libtensorflow_framework.so.2",
+        libroot / "tensorflow/python/profiler/internal/_pywrap_profiler_plugin.so",
+        libroot / "torch/lib/libtorch_cpu.so",
+        libroot / "torch/lib/libtorch_python.so",
+        libroot / "cv2/cv2.abi3.so",
+    ]
+    try:
+        weights = Path.home() / ".deepface" / "weights"
+        if weights.is_dir():
+            library_paths.extend(
+                p for p in weights.iterdir()
+                if p.suffix.lower() in (".h5", ".keras", ".pth", ".pt", ".onnx", ".pb")
+            )
+    except OSError:
+        pass
+
+    for path in library_paths:
+        try:
+            if path.is_symlink():
+                continue
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                import stat
+                info = os.fstat(fd)
+                if stat.S_ISREG(info.st_mode) and info.st_size >= 4 * 1024 * 1024:
+                    os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+            finally:
+                os.close(fd)
+        except (OSError, ValueError):
+            # Never interrupt staff attendance for memory advice.
+            continue
+
 
 _IDLE_SECONDS = max(30, min(600, int(os.getenv("FACE_WORKER_IDLE_SECONDS", "90"))))
 _TIMEOUT_SECONDS = max(30, min(600, int(os.getenv("FACE_WORKER_TIMEOUT_SECONDS", "240"))))
@@ -34,7 +88,14 @@ def _retire(expected_pool):
             return
         _POOL = None
         _IDLE_TIMER = None
-    expected_pool.shutdown(wait=False, cancel_futures=False)
+    # Retirement executes in a daemon timer thread, not the HTTP request path.
+    # Wait for full exit before advising the kernel about cached weight pages.
+    expected_pool.shutdown(wait=True, cancel_futures=False)
+    if _FILE_CACHE_RECLAIM:
+        with _LOCK:
+            # Never evict while a new inference worker is in use.
+            if _POOL is None and _ACTIVE == 0:
+                _advise_idle_ai_file_cache()
 
 
 def _close_on_exit():
