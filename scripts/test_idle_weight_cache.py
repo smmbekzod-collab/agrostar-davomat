@@ -22,9 +22,9 @@ class IdleCacheTests(TestCase):
         self.worker = load_worker()
 
     def test_disabled_by_default(self):
-        with mock.patch.object(self.worker, "_MODEL_CACHE_RECLAIM", False), \
+        with mock.patch.object(self.worker, "_FILE_CACHE_RECLAIM", False), \
              mock.patch("os.posix_fadvise") as advice:
-            self.worker._advise_idle_model_cache()
+            self.worker._advise_idle_ai_file_cache()
             advice.assert_not_called()
 
     def test_only_large_regular_model_weights_are_advised(self):
@@ -43,10 +43,11 @@ class IdleCacheTests(TestCase):
             def record(fd, offset, length, advice):
                 events.append((os.fstat(fd).st_size, offset, length, advice))
 
-            with mock.patch.object(self.worker, "_MODEL_CACHE_RECLAIM", True), \
+            with mock.patch.object(self.worker, "_FILE_CACHE_RECLAIM", True), \
                  mock.patch.object(Path, "home", return_value=Path(tmp)), \
+                 mock.patch.object(self.worker.sysconfig, "get_paths", return_value={"purelib":str(Path(tmp)/"site-packages")}), \
                  mock.patch("os.posix_fadvise", side_effect=record):
-                self.worker._advise_idle_model_cache()
+                self.worker._advise_idle_ai_file_cache()
 
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0], (5*1024*1024, 0, 0, os.POSIX_FADV_DONTNEED))
@@ -55,16 +56,47 @@ class IdleCacheTests(TestCase):
                 self.assertEqual(f.read(4), b"SAFE")
             self.assertEqual((base / "README.txt").read_text(), "never touch other files")
 
+    def test_target_only_observed_ml_library_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "site-packages"
+            ai_libs = [
+                base / "tensorflow/libtensorflow_cc.so.2",
+                base / "tensorflow/libtensorflow_framework.so.2",
+                base / "torch/lib/libtorch_cpu.so",
+                base / "torch/lib/libtorch_python.so",
+            ]
+            for p in ai_libs:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                with p.open("wb") as fh:
+                    fh.write(b"KEEP")
+                    fh.truncate(5 * 1024 * 1024)
+            other = base / "tensorflow/unrelated.so"
+            with other.open("wb") as fh:
+                fh.truncate(5 * 1024 * 1024)
+            events = []
+            def record(fd, offset, length, advice):
+                events.append(os.fstat(fd).st_ino)
+            with mock.patch.object(self.worker, "_FILE_CACHE_RECLAIM", True), \
+                 mock.patch.object(Path, "home", return_value=Path(tmp)), \
+                 mock.patch.object(self.worker.sysconfig, "get_paths", return_value={"purelib":str(base)}), \
+                 mock.patch("os.posix_fadvise", side_effect=record):
+                self.worker._advise_idle_ai_file_cache()
+            self.assertEqual(len(events), 4)
+            self.assertEqual(set(events), {p.stat().st_ino for p in ai_libs})
+            self.assertEqual(other.stat().st_size, 5*1024*1024)
+            self.assertEqual(ai_libs[0].open("rb").read(4), b"KEEP")
+
     def test_kernel_failure_is_nonfatal(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp) / ".deepface" / "weights"
             d.mkdir(parents=True)
             with (d / "test.h5").open("wb") as f:
                 f.truncate(5 * 1024 * 1024)
-            with mock.patch.object(self.worker, "_MODEL_CACHE_RECLAIM", True), \
+            with mock.patch.object(self.worker, "_FILE_CACHE_RECLAIM", True), \
                  mock.patch.object(Path, "home", return_value=Path(tmp)), \
+                 mock.patch.object(self.worker.sysconfig, "get_paths", return_value={"purelib":str(Path(tmp)/"site-packages")}), \
                  mock.patch("os.posix_fadvise", side_effect=OSError("not supported")):
-                self.worker._advise_idle_model_cache()
+                self.worker._advise_idle_ai_file_cache()
 
     def test_idle_retirement_waits_for_process_exit(self):
         class Pool:
@@ -74,8 +106,8 @@ class IdleCacheTests(TestCase):
         pool = Pool()
         with mock.patch.object(self.worker, "_POOL", pool), \
              mock.patch.object(self.worker, "_ACTIVE", 0), \
-             mock.patch.object(self.worker, "_MODEL_CACHE_RECLAIM", True), \
-             mock.patch.object(self.worker, "_advise_idle_model_cache") as advice:
+             mock.patch.object(self.worker, "_FILE_CACHE_RECLAIM", True), \
+             mock.patch.object(self.worker, "_advise_idle_ai_file_cache") as advice:
             self.worker._retire(pool)
             self.assertIsNone(self.worker._POOL)
             advice.assert_called_once()
@@ -88,7 +120,7 @@ class IdleCacheTests(TestCase):
         current, stale = Pool(), Pool()
         with mock.patch.object(self.worker, "_POOL", current), \
              mock.patch.object(self.worker, "_ACTIVE", 0), \
-             mock.patch.object(self.worker, "_advise_idle_model_cache") as advice:
+             mock.patch.object(self.worker, "_advise_idle_ai_file_cache") as advice:
             self.worker._retire(stale)
             advice.assert_not_called()
 
@@ -101,8 +133,8 @@ class IdleCacheTests(TestCase):
         p = Pool()
         with mock.patch.object(worker, "_POOL", p), \
              mock.patch.object(worker, "_ACTIVE", 0), \
-             mock.patch.object(worker, "_MODEL_CACHE_RECLAIM", True), \
-             mock.patch.object(worker, "_advise_idle_model_cache") as advice:
+             mock.patch.object(worker, "_FILE_CACHE_RECLAIM", True), \
+             mock.patch.object(worker, "_advise_idle_ai_file_cache") as advice:
             worker._retire(p)
             advice.assert_not_called()
 
