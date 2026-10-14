@@ -46,3 +46,22 @@ with zipfile.ZipFile(archive) as z:
                         if name and name in {"sleep","add_job","start","shutdown","create_task","run","execute","scalars","commit","refresh","list","select","wait_for","fetchall","fetchone","connect","execute","schedule","get_db","session"}:
                             calls.append(name)
                 print("TASK_LOOP_AUDIT "+json.dumps({"path":path,"fn":n.name,"calls":calls[:50]}))
+
+    for path in files:
+        if not (path.endswith("/backend/app/main.py") or path.endswith("/backend/app/services/work_scheduler.py")):
+            continue
+        tree=ast.parse(z.read(path).decode("utf-8"))
+        for n in ast.walk(tree):
+            if isinstance(n,ast.Call):
+                c=n.func
+                name=getattr(c,"attr",None) or getattr(c,"id",None)
+                if name not in ("add_job","start_scheduler","stop_scheduler","reminder_tick","AsyncIOScheduler","BackgroundScheduler"):
+                    continue
+                options={}
+                for kw in n.keywords:
+                    v=kw.value
+                    if isinstance(v,ast.Constant) and type(v.value) in (str,int,bool,float):
+                        options[kw.arg]=v.value
+                    elif kw.arg=="trigger":
+                        options["trigger_expression_type"]=type(v).__name__
+                print("SCHEDULER_BINDING "+json.dumps({"path":path,"call":name,"static_options":options},ensure_ascii=False))
