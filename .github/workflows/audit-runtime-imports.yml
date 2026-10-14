@@ -1,0 +1,17 @@
+name: Read-only backend ML import audit
+on:
+  push:
+    branches: [audit/backend-perf-2026-10-13]
+    paths:
+      - 'scripts/audit_runtime_imports.py'
+      - '.github/workflows/audit-runtime-imports.yml'
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect bundled Python sources without importing application
+        run: python scripts/audit_runtime_imports.py
